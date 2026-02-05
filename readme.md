@@ -1,0 +1,1 @@
+Experimental MNIST neural network trainer

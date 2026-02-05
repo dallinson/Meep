@@ -1,0 +1,8 @@
+[package]
+name = "meep"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cudarc = { "version" = "0.18.2", "features" = ["cuda-version-from-build-system"]}
+mnist = "0.6.0"
