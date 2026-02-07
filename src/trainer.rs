@@ -1,9 +1,9 @@
-use cudarc::driver::CudaSlice;
+use cudarc::driver::{CudaSlice, CudaView};
 
 use crate::{
     LEARNING_RATE,
-    backend::{self, GPUBackend},
-    layer::{self, ActivationFunction},
+    backend::{CublasShape, GPUBackend},
+    layer::{ActivationFunction},
     network::Network,
 };
 
@@ -20,10 +20,10 @@ impl Trainer {
         }
     }
 
-    pub(crate) fn feedforward(
+    fn feedforward(
         &self,
         backend: &GPUBackend,
-        data: &mut CudaSlice<f32>,
+        data: CudaView<f32>,
         zs: &mut Vec<CudaSlice<f32>>,
         outputs: &mut Vec<CudaSlice<f32>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -37,28 +37,30 @@ impl Trainer {
 
         let mut matmul_idx = 0;
         for layer in self.network.layers[1..].iter() {
-            let split_outputs = outputs.split_at_mut(matmul_idx);
             let current_activated_data = if matmul_idx == 0 {
-                &mut *data
+                data.slice(..)
             } else {
-                split_outputs.0.last_mut().unwrap()
+                outputs[matmul_idx - 1].as_view()
             };
             match layer {
                 crate::layer::LayerType::NODE(_) => {
                     // Matmul!
                     let output_matrix = &mut zs[matmul_idx];
-                    backend.splat(&self.network.biases[matmul_idx], output_matrix)?;
+                    backend.splat(self.network.biases[matmul_idx].as_view(), output_matrix.as_view_mut())?;
                     backend.matmul_unstrided(
                         false,
                         false,
-                        self.network.layer_sizes[matmul_idx + 1],
-                        self.batch_size,
-                        self.network.layer_sizes[matmul_idx],
+                        CublasShape::new(
+                            self.network.layer_sizes[matmul_idx + 1],
+                            self.network.layer_sizes[matmul_idx],
+                        ),
+                        CublasShape::new(self.network.layer_sizes[matmul_idx], self.batch_size),
+                        CublasShape::new(self.network.layer_sizes[matmul_idx + 1], self.batch_size),
                         1.0f32,
                         1.0f32,
-                        &self.network.weights[matmul_idx],
+                        self.network.weights[matmul_idx].as_view(),
                         current_activated_data,
-                        output_matrix,
+                        output_matrix.as_view_mut(),
                     )?;
                     matmul_idx += 1;
                 }
@@ -67,7 +69,7 @@ impl Trainer {
                         crate::layer::ActivationFunction::SIGMOID => backend.unary(
                             "sigmoid",
                             zs[matmul_idx.checked_sub(1).unwrap()].as_view(),
-                            current_activated_data,
+                            outputs[matmul_idx.checked_sub(1).unwrap()].as_view_mut(),
                         )?,
                     }
                 }
@@ -80,10 +82,10 @@ impl Trainer {
     pub(crate) fn calculate_loss(
         &self,
         backend: &GPUBackend,
-        data: &mut CudaSlice<f32>,
-        labels: &CudaSlice<usize>,
+        data: CudaView<f32>,
+        labels: CudaView<usize>,
     ) -> Result<f32, Box<dyn std::error::Error>> {
-        assert_eq!(self.batch_size * self.network.layer_sizes[0], data.len());
+        assert_eq!(labels.len() * self.network.layer_sizes[0], data.len());
         let mut outputs = Vec::new();
         let mut zs = Vec::new();
         for layer_size in self.network.layer_sizes[1..].iter() {
@@ -93,15 +95,15 @@ impl Trainer {
 
         self.feedforward(backend, data, &mut zs, &mut outputs)?; // Feedforwards first
         backend.synchronize()?;
-        let result = backend.calculate_loss(outputs.last().unwrap(), labels)?;
+        let result = backend.calculate_loss(outputs.last().unwrap().as_view(), labels)?;
         Ok(result)
     }
 
     pub(crate) fn backprop(
         &mut self,
         backend: &GPUBackend,
-        data: &mut CudaSlice<f32>,
-        labels: &CudaSlice<usize>,
+        data: CudaView<f32>,
+        labels: CudaView<usize>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut outputs = Vec::new();
         let mut zs = Vec::new();
@@ -117,7 +119,7 @@ impl Trainer {
             weight_changes.push(backend.stream.alloc_zeros::<f32>(weights.len())?);
         }
 
-        self.feedforward(backend, data, &mut zs, &mut outputs)?;
+        self.feedforward(backend, data.slice(..), &mut zs, &mut outputs)?;
         let outputs = outputs;
         let activations = self
             .network
@@ -136,60 +138,73 @@ impl Trainer {
                 match function {
                     ActivationFunction::SIGMOID => "sigmoid_prime",
                 },
-                z,
+                z.as_view_mut(),
             )?;
         }
         let filled_activations = backend.fill_estimated(labels)?;
         backend.binary(
             "squared_diff_prime",
-            &outputs.last().unwrap(),
-            &filled_activations,
-            deltas.last_mut().unwrap(),
+            outputs.last().unwrap().as_view(),
+            filled_activations.as_view(),
+            deltas.last_mut().unwrap().as_view_mut(),
         )?;
         for (rev_idx, layer_size) in self.network.layer_sizes[1..].iter().rev().enumerate() {
             if rev_idx != 0 {
                 // We need to fill curr_delta (the last curr_delta in the chain was filled by the earlier squared_diff_prime call)
-                let split = deltas.split_at_mut(z_out_delta_len - 1 - rev_idx);
+                let split = deltas.split_at_mut(z_out_delta_len - rev_idx);
                 backend.matmul_unstrided(
                     true,
                     false,
-                    *layer_size,
-                    self.batch_size,
-                    self.network.layer_sizes[self.network.layer_sizes.len() - rev_idx], // rows in b =
+                    CublasShape::new(
+                        self.network.layer_sizes[self.network.layer_sizes.len() - rev_idx],
+                        *layer_size,
+                    ),
+                    CublasShape::new(
+                        self.network.layer_sizes[self.network.layer_sizes.len() - rev_idx],
+                        self.batch_size,
+                    ),
+                    CublasShape::new(*layer_size, self.batch_size), // rows in b =
                     1.0f32,
                     0.0f32,
-                    &self.network.weights[self.network.weights.len() - rev_idx],
-                    split.1.first().unwrap(),
-                    split.0.last_mut().unwrap(),
+                    self.network.weights[self.network.weights.len() - rev_idx].as_view(),
+                    split.1.first().unwrap().as_view(),
+                    split.0.last_mut().unwrap().as_view_mut(),
                 )?;
             }
             let curr_delta = &mut deltas[z_out_delta_len - 1 - rev_idx];
             let curr_z = &zs[zs.len() - 1 - rev_idx];
-            backend.binary_inplace("multiply", curr_z.as_view(), curr_delta)?;
+            backend.binary_inplace("multiply", curr_z.as_view(), curr_delta.as_view_mut())?;
             // This computes the delta of this layer
             // We next need to compute the derivative of the loss wrt the weights (the delta is the biases!)
-            println!("delta matmul");
             backend.matmul_unstrided(
                 false,
                 true,
-                self.network.layer_sizes[z_out_delta_len - rev_idx],
-                self.network.layer_sizes[z_out_delta_len - rev_idx - 1],
-                self.batch_size,
+                CublasShape::new(
+                    self.network.layer_sizes[z_out_delta_len - rev_idx],
+                    self.batch_size,
+                ),
+                CublasShape::new(
+                    self.network.layer_sizes[z_out_delta_len - rev_idx - 1],
+                    self.batch_size,
+                ),
+                CublasShape::new(
+                    self.network.layer_sizes[z_out_delta_len - rev_idx],
+                    self.network.layer_sizes[z_out_delta_len - rev_idx - 1],
+                ),
                 1.0f32,
                 1.0f32,
-                curr_delta,
+                curr_delta.as_view(),
                 if z_out_delta_len < 2 + rev_idx {
                     // z_out_data_len is at least 2 if a hidden layer exists (hl + ol)
-                    data
+                    data.slice(..)
                 } else {
                     assert!(z_out_delta_len >= 2 + rev_idx);
                     // if we have e.g. 3 layers (input, hl, ol) then output has 2 entries
                     // so len - 2 is legal
-                    &outputs[z_out_delta_len - 2 - rev_idx]
+                    outputs[z_out_delta_len - 2 - rev_idx].as_view()
                 },
-                &mut weight_changes[self.network.weights.len() - 1 - rev_idx],
+                weight_changes[self.network.weights.len() - 1 - rev_idx].as_view_mut(),
             )?;
-            println!("loop");
         }
 
         // We have now computed the weight and bias changes for each layer!
@@ -199,7 +214,7 @@ impl Trainer {
             .zip(self.network.weights.iter_mut())
         {
             backend.mult_by_val(change.as_view_mut(), LEARNING_RATE)?;
-            backend.binary_inplace("add", change.as_view(), weights)?; // Adjust changes by learning rate and add to weights
+            backend.binary_inplace("add", change.as_view(), weights.as_view_mut())?; // Adjust changes by learning rate and add to weights
         }
         for ((delta, biases), layer_size) in deltas
             .iter_mut()
@@ -209,7 +224,7 @@ impl Trainer {
             // Compute the biases for this delta
             backend.reduce_strided(delta, self.batch_size, *layer_size, *layer_size)?;
             backend.mult_by_val(delta.as_view_mut().slice_mut(0..*layer_size), LEARNING_RATE)?;
-            backend.binary_inplace("add", delta.as_view().slice(0..*layer_size), biases)?;
+            backend.binary_inplace("add", delta.as_view().slice(0..*layer_size), biases.as_view_mut())?;
         }
 
         backend.synchronize()?;

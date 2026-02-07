@@ -67,8 +67,8 @@ impl Network {
         backend: &GPUBackend,
     ) -> Result<(), Box<dyn std::error::Error>> {
         for i in 0..self.layer_sizes.len() - 1 {
-            backend.fill_with_uniform(&mut self.weights[i])?;
-            backend.fill_with_uniform(&mut self.biases[i])?;
+            backend.fill_with_uniform(self.weights[i].as_view_mut())?;
+            backend.fill_with_uniform(self.biases[i].as_view_mut())?;
         }
         Ok(())
     }
