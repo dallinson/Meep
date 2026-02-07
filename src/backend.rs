@@ -260,7 +260,7 @@ impl GPUBackend {
         }
 
         self.reduce_strided(
-            &mut labelled_outputs,
+            labelled_outputs.as_view_mut(),
             labels.len(),
             OUTPUT_LABELS,
             OUTPUT_LABELS,
@@ -304,7 +304,7 @@ impl GPUBackend {
 
     pub(crate) fn reduce_strided(
         &self,
-        dat: &mut CudaSlice<f32>,
+        mut dat: CudaViewMut<f32>,
         elem_count: usize,
         offset: usize,
         vector_size: usize,
@@ -314,7 +314,7 @@ impl GPUBackend {
         let mut stride = offset;
         while to_reduce > 1 {
             let mut builder = self.stream.launch_builder(&func);
-            builder.arg(&mut *dat);
+            builder.arg(&mut dat);
             builder.arg(&to_reduce);
             builder.arg(&stride);
             unsafe {
@@ -329,5 +329,39 @@ impl GPUBackend {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn calculate_matching(
+        &self,
+        outputs: CudaView<f32>,
+        labels: CudaView<usize>,
+        label_count: usize,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        let mut matches = self.stream.alloc_zeros::<f32>(labels.len())?;
+        {
+            let func = self.kernels.load_function("find_matching")?;
+            let mut builder = self.stream.launch_builder(&func);
+            let label_len = labels.len();
+            builder.arg(&outputs);
+            builder.arg(&labels);
+            builder.arg(&mut matches);
+            builder.arg(&label_count);
+            builder.arg(&label_len);
+
+            unsafe {
+                builder.launch(LaunchConfig::for_num_elems(label_len as u32))?;
+            };
+        }
+
+        self.reduce_strided(matches.as_view_mut(), labels.len(), 1, 1)?;
+
+        let slice = matches.as_view().slice(0..1);
+
+        let res = self
+            .stream
+            .clone_dtoh(&slice)?;
+        let res = res.first()
+            .unwrap();
+        Ok(*res as usize)
     }
 }

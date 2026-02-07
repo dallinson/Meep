@@ -171,3 +171,20 @@ extern "C" __global__ void mult_by_float(f32* data, const f32 mult, usize count)
         reinterpret_cast<float4*>(data)[tid] = f4;
     }
 }
+
+extern "C" __global__ void find_matching(const f32* data, const usize* labels, f32* matches, usize vec_size, usize count) {
+    const auto tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid >= count) {
+        return;
+    }
+    auto max = data[tid * vec_size];
+    auto max_idx = 0;
+    for (usize i = 1; i < vec_size; i++) {
+        const auto elem = data[(tid * vec_size) + i];
+        if (elem > max) {
+            max = elem;
+            max_idx = i;
+        }
+    }
+    matches[tid] = max_idx == labels[tid] ? 1.0f : 0.0f;
+}

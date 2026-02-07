@@ -54,7 +54,10 @@ impl MnistManager {
         })
     }
 
-    pub(crate) fn get_train_data(&self, range: Range<usize>) -> (CudaView<f32>, CudaView<usize>) {
+    pub(crate) fn get_train_data(
+        &self,
+        range: Range<usize>,
+    ) -> (CudaView<'_, f32>, CudaView<'_, usize>) {
         let label_range = self.trn_lbl.as_view().slice(range.clone());
         let img_range = self
             .trn_img
@@ -63,7 +66,10 @@ impl MnistManager {
         (img_range, label_range)
     }
 
-    pub(crate) fn get_test_data(&self, range: Range<usize>) -> (CudaView<f32>, CudaView<usize>) {
+    pub(crate) fn get_test_data(
+        &self,
+        range: Range<usize>,
+    ) -> (CudaView<'_, f32>, CudaView<'_, usize>) {
         let label_range = self.tst_lbl.as_view().slice(range.clone());
         let img_range = self
             .tst_img

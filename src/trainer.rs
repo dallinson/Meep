@@ -1,10 +1,7 @@
 use cudarc::driver::{CudaSlice, CudaView};
 
 use crate::{
-    LEARNING_RATE,
-    backend::{CublasShape, GPUBackend},
-    layer::{ActivationFunction},
-    network::Network,
+    LEARNING_RATE, OUTPUT_LABELS, backend::{CublasShape, GPUBackend}, layer::ActivationFunction, network::Network
 };
 
 pub(crate) struct Trainer {
@@ -46,7 +43,10 @@ impl Trainer {
                 crate::layer::LayerType::NODE(_) => {
                     // Matmul!
                     let output_matrix = &mut zs[matmul_idx];
-                    backend.splat(self.network.biases[matmul_idx].as_view(), output_matrix.as_view_mut())?;
+                    backend.splat(
+                        self.network.biases[matmul_idx].as_view(),
+                        output_matrix.as_view_mut(),
+                    )?;
                     backend.matmul_unstrided(
                         false,
                         false,
@@ -84,7 +84,7 @@ impl Trainer {
         backend: &GPUBackend,
         data: CudaView<f32>,
         labels: CudaView<usize>,
-    ) -> Result<f32, Box<dyn std::error::Error>> {
+    ) -> Result<(f32, usize), Box<dyn std::error::Error>> {
         assert_eq!(labels.len() * self.network.layer_sizes[0], data.len());
         let mut outputs = Vec::new();
         let mut zs = Vec::new();
@@ -95,8 +95,9 @@ impl Trainer {
 
         self.feedforward(backend, data, &mut zs, &mut outputs)?; // Feedforwards first
         backend.synchronize()?;
-        let result = backend.calculate_loss(outputs.last().unwrap().as_view(), labels)?;
-        Ok(result)
+        let result = backend.calculate_loss(outputs.last().unwrap().as_view(), labels.slice(..))?;
+        let match_count = backend.calculate_matching(outputs.last().unwrap().as_view(), labels, OUTPUT_LABELS)?;
+        Ok((result, match_count))
     }
 
     pub(crate) fn backprop(
@@ -222,9 +223,18 @@ impl Trainer {
             .zip(self.network.layer_sizes[1..].iter())
         {
             // Compute the biases for this delta
-            backend.reduce_strided(delta, self.batch_size, *layer_size, *layer_size)?;
+            backend.reduce_strided(
+                delta.as_view_mut(),
+                self.batch_size,
+                *layer_size,
+                *layer_size,
+            )?;
             backend.mult_by_val(delta.as_view_mut().slice_mut(0..*layer_size), LEARNING_RATE)?;
-            backend.binary_inplace("add", delta.as_view().slice(0..*layer_size), biases.as_view_mut())?;
+            backend.binary_inplace(
+                "add",
+                delta.as_view().slice(0..*layer_size),
+                biases.as_view_mut(),
+            )?;
         }
 
         backend.synchronize()?;

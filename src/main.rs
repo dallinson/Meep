@@ -7,37 +7,40 @@ mod trainer;
 use crate::{backend::GPUBackend, layer::Layer, mnist::MnistManager, trainer::Trainer};
 
 const OUTPUT_LABELS: usize = 10;
-const BATCH_SIZE: usize = 5000;
-const EPOCH_SIZE: usize = 60000;
-const EPOCH_COUNT: usize = 10_000;
+const BATCH_SIZE: usize = 5_000;
+const EPOCH_SIZE: usize = 60_000;
+const EPOCH_COUNT: usize = 5_000;
 const LEARNING_RATE: f32 = -0.001f32 * (BATCH_SIZE as f32 / EPOCH_SIZE as f32);
 
 fn calculate_loss(
     backend: &GPUBackend,
     trainer: &Trainer,
     data: &MnistManager,
-) -> Result<f32, Box<dyn std::error::Error>> {
+) -> Result<(f32, usize), Box<dyn std::error::Error>> {
     let test_size = data.tst_lbl.len();
     assert_eq!(test_size % BATCH_SIZE, 0);
     let mut sum = 0.0f32;
+    let mut match_count = 0;
     for batch in 0..(test_size / BATCH_SIZE) {
         let offset = batch * BATCH_SIZE;
         let (trn_img, trn_lbl) = data.get_test_data(offset..(offset + BATCH_SIZE));
-        
-        sum += trainer.calculate_loss(backend, trn_img, trn_lbl)?;
+
+        let data =  trainer.calculate_loss(backend, trn_img, trn_lbl)?;
+        sum += data.0;
+        match_count += data.1;
     }
-    Ok(sum)
+    Ok((sum, match_count))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Hello, world!");
 
     let l1 = Layer::new(28 * 28);
-    let l2 = l1.matmul(512);
-    let l2 = l2.sigmoid();
-    let l3 = l2.matmul(256);
-    let l3 = l3.sigmoid();
-    let output = l3.matmul(10);
+    let l5 = l1.matmul(1000);
+    let l5 = l5.sigmoid();
+    let l6 = l5.matmul(500);
+    let l6 = l6.sigmoid();
+    let output = l6.matmul(10);
     let output = output.sigmoid();
     let mut net = output.compile();
 
@@ -48,10 +51,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let backend = GPUBackend::new(ctx.clone())?;
     net.randomise_weights(&backend)?;
-    let mut trainer = Trainer::new(5000, net);
+    let mut trainer = Trainer::new(BATCH_SIZE, net);
     let data = MnistManager::new(&backend)?;
     let loss = calculate_loss(&backend, &trainer, &data)?;
-    println!("Net loss: {}", loss);
+    println!("Net loss: {}, matches: {}", loss.0, loss.1);
 
     println!("Training...");
     for epoch in 0..EPOCH_COUNT {
@@ -63,11 +66,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if epoch % 100 == 0 {
             let loss = calculate_loss(&backend, &trainer, &data)?;
-            println!("Epoch {} loss: {}", epoch, loss);
+            println!("Epoch {} loss: {}, matches: {}", epoch, loss.0, loss.1);
         }
     }
     let loss = calculate_loss(&backend, &trainer, &data)?;
-    println!("Net loss: {}", loss);
+    println!("Net loss: {}, matches: {}", loss.0, loss.1);
 
     Ok(())
 }
