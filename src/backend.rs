@@ -357,11 +357,8 @@ impl GPUBackend {
 
         let slice = matches.as_view().slice(0..1);
 
-        let res = self
-            .stream
-            .clone_dtoh(&slice)?;
-        let res = res.first()
-            .unwrap();
+        let res = self.stream.clone_dtoh(&slice)?;
+        let res = res.first().unwrap();
         Ok(*res as usize)
     }
 }

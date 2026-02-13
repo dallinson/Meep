@@ -1,21 +1,23 @@
 use std::{fmt::Debug, sync::Arc};
 
-use cudarc::driver::{CudaContext, CudaSlice};
+use cudarc::driver::{CudaContext, CudaSlice, CudaView};
 
 use crate::{
-    backend::GPUBackend,
+    backend::{self, GPUBackend},
     layer::{Layer, LayerType},
 };
 
 pub(crate) struct Network {
     pub(crate) layers: Vec<LayerType>,
     pub(crate) layer_sizes: Vec<usize>,
-    pub(crate) weights: Vec<CudaSlice<f32>>,
-    pub(crate) biases: Vec<CudaSlice<f32>>,
+    pub(crate) weights: CudaSlice<f32>,
 }
 
 impl Network {
-    pub(crate) fn from_layers(layer: &Layer) -> Self {
+    pub(crate) fn from_layers(
+        layer: &Layer,
+        backend: &GPUBackend,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut layers = Vec::new();
         layers.push(layer);
         let mut layer = layer;
@@ -31,46 +33,42 @@ impl Network {
                 LayerType::NODE(size) => Some(size),
                 _ => None,
             })
-            .collect();
+            .collect::<Vec<_>>();
 
-        Self {
+        let sum = layer_sizes
+            .windows(2)
+            .map(|elems| elems[0] * elems[1])
+            .sum::<usize>()
+            + layer_sizes.iter().sum::<usize>();
+
+        Ok(Self {
             layers: layers.iter().map(|x| x.layer_type).collect(),
             layer_sizes,
-            weights: Vec::new(),
-            biases: Vec::new(),
-        }
-    }
-
-    pub(crate) fn init_gpu(
-        &mut self,
-        ctx: Arc<CudaContext>,
-    ) -> Result<&mut Self, Box<dyn std::error::Error>> {
-        self.weights = Vec::new();
-        self.biases = Vec::new();
-
-        for i in 1..self.layer_sizes.len() {
-            self.weights.push(
-                ctx.default_stream()
-                    .alloc_zeros::<f32>(self.layer_sizes[i - 1] * self.layer_sizes[i])?,
-            );
-            self.biases.push(
-                ctx.default_stream()
-                    .alloc_zeros::<f32>(self.layer_sizes[i])?,
-            );
-        }
-
-        Ok(self)
+            weights: backend.stream.alloc_zeros::<f32>(sum)?,
+        })
     }
 
     pub(crate) fn randomise_weights(
         &mut self,
         backend: &GPUBackend,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        for i in 0..self.layer_sizes.len() - 1 {
-            backend.fill_with_uniform(self.weights[i].as_view_mut())?;
-            backend.fill_with_uniform(self.biases[i].as_view_mut())?;
-        }
+        backend.fill_with_uniform(self.weights.as_view_mut())?;
         Ok(())
+    }
+
+    pub(crate) fn get_weights_biases(&self) -> Vec<(CudaView<f32>, CudaView<f32>)> {
+        let mut to_return = Vec::new();
+        let mut curr_idx = 0;
+        for layer_sizes in self.layer_sizes.windows(2) {
+            let prev_layer_size = layer_sizes[0];
+            let curr_layer_size = layer_sizes[1];
+            let weights = self.weights.slice(curr_idx..(curr_idx + (prev_layer_size * curr_layer_size)));
+            curr_idx += prev_layer_size * curr_layer_size;
+            let biases = self.weights.slice(curr_idx..(curr_idx + curr_layer_size));
+            curr_idx += curr_layer_size;
+            to_return.push((weights, biases));
+        }
+        to_return
     }
 }
 

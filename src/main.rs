@@ -25,7 +25,7 @@ fn calculate_loss(
         let offset = batch * BATCH_SIZE;
         let (trn_img, trn_lbl) = data.get_test_data(offset..(offset + BATCH_SIZE));
 
-        let data =  trainer.calculate_loss(backend, trn_img, trn_lbl)?;
+        let data = trainer.calculate_loss(backend, trn_img, trn_lbl)?;
         sum += data.0;
         match_count += data.1;
     }
@@ -35,21 +35,18 @@ fn calculate_loss(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Hello, world!");
 
+    let ctx = cudarc::driver::CudaContext::new(0)?;
+    let backend = GPUBackend::new(ctx.clone())?;
+
     let l1 = Layer::new(28 * 28);
-    let l5 = l1.matmul(1000);
-    let l5 = l5.sigmoid();
-    let l6 = l5.matmul(500);
-    let l6 = l6.sigmoid();
-    let output = l6.matmul(10);
+    let l2 = l1.matmul(256);
+    let l2 = l2.sigmoid();
+    let output = l2.matmul(10);
     let output = output.sigmoid();
-    let mut net = output.compile();
+    let mut net = output.compile(&backend)?;
 
     println!("{:?}", net);
 
-    let ctx = cudarc::driver::CudaContext::new(0)?;
-    net.init_gpu(ctx.clone())?;
-
-    let backend = GPUBackend::new(ctx.clone())?;
     net.randomise_weights(&backend)?;
     let mut trainer = Trainer::new(BATCH_SIZE, net);
     let data = MnistManager::new(&backend)?;
