@@ -1,9 +1,9 @@
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
-use cudarc::driver::{CudaContext, CudaSlice, CudaView};
+use cudarc::driver::{CudaSlice, CudaView};
 
 use crate::{
-    backend::{self, GPUBackend},
+    backend::GPUBackend,
     layer::{Layer, LayerType},
 };
 
@@ -56,13 +56,15 @@ impl Network {
         Ok(())
     }
 
-    pub(crate) fn get_weights_biases(&self) -> Vec<(CudaView<f32>, CudaView<f32>)> {
+    pub(crate) fn get_weights_biases(&self) -> Vec<(CudaView<'_, f32>, CudaView<'_, f32>)> {
         let mut to_return = Vec::new();
         let mut curr_idx = 0;
         for layer_sizes in self.layer_sizes.windows(2) {
             let prev_layer_size = layer_sizes[0];
             let curr_layer_size = layer_sizes[1];
-            let weights = self.weights.slice(curr_idx..(curr_idx + (prev_layer_size * curr_layer_size)));
+            let weights = self
+                .weights
+                .slice(curr_idx..(curr_idx + (prev_layer_size * curr_layer_size)));
             curr_idx += prev_layer_size * curr_layer_size;
             let biases = self.weights.slice(curr_idx..(curr_idx + curr_layer_size));
             curr_idx += curr_layer_size;

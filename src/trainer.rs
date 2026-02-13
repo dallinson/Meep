@@ -1,4 +1,4 @@
-use cudarc::driver::{CudaSlice, CudaView, CudaViewMut};
+use cudarc::driver::{CudaView, CudaViewMut};
 
 use crate::{
     LEARNING_RATE, OUTPUT_LABELS,
@@ -30,8 +30,12 @@ impl Trainer {
         assert_eq!(data.len() % self.network.layer_sizes[0], 0); // Make sure we send the right amount of data!
         assert_eq!(data.len() / self.network.layer_sizes[0], self.batch_size);
         assert_eq!(z.len(), output.len());
-        assert_eq!(z.len(), self.network.layer_sizes[1..].iter().sum::<usize>() * self.batch_size);
-        let (weights, biases): (Vec<_>, Vec<_>) = self.network.get_weights_biases().into_iter().unzip();
+        assert_eq!(
+            z.len(),
+            self.network.layer_sizes[1..].iter().sum::<usize>() * self.batch_size
+        );
+        let (weights, biases): (Vec<_>, Vec<_>) =
+            self.network.get_weights_biases().into_iter().unzip();
         let mut z_out_delta_ranges = Vec::new();
         let mut curr_idx = 0;
         for size in self.network.layer_sizes[1..].iter() {
@@ -51,10 +55,7 @@ impl Trainer {
                 crate::layer::LayerType::NODE(_) => {
                     // Matmul!
                     let mut output_matrix = z.slice_mut(z_out_delta_ranges[matmul_idx].clone());
-                    backend.splat(
-                        biases[matmul_idx].slice(..),
-                        output_matrix.slice_mut(..),
-                    )?;
+                    backend.splat(biases[matmul_idx].slice(..), output_matrix.slice_mut(..))?;
                     backend.matmul_unstrided(
                         false,
                         false,
@@ -77,7 +78,9 @@ impl Trainer {
                         crate::layer::ActivationFunction::SIGMOID => backend.unary(
                             "sigmoid",
                             z.slice(z_out_delta_ranges[matmul_idx.checked_sub(1).unwrap()].clone()),
-                            output.slice_mut(z_out_delta_ranges[matmul_idx.checked_sub(1).unwrap()].clone()),
+                            output.slice_mut(
+                                z_out_delta_ranges[matmul_idx.checked_sub(1).unwrap()].clone(),
+                            ),
                         )?,
                     }
                 }
@@ -94,10 +97,17 @@ impl Trainer {
         labels: CudaView<usize>,
     ) -> Result<(f32, usize), Box<dyn std::error::Error>> {
         assert_eq!(labels.len() * self.network.layer_sizes[0], data.len());
-        let mut output = backend.stream.alloc_zeros(self.network.layer_sizes[1..].iter().sum::<usize>() * self.batch_size)?;
-        let mut z = backend.stream.alloc_zeros(self.network.layer_sizes[1..].iter().sum::<usize>() * self.batch_size)?;
+        let mut output = backend
+            .stream
+            .alloc_zeros(self.network.layer_sizes[1..].iter().sum::<usize>() * self.batch_size)?;
+        let mut z = backend
+            .stream
+            .alloc_zeros(self.network.layer_sizes[1..].iter().sum::<usize>() * self.batch_size)?;
         self.feedforward(backend, data, z.as_view_mut(), output.as_view_mut())?; // Feedforwards first
-        let last_idx = self.network.layer_sizes[1..(self.network.layer_sizes.len() - 1)].iter().sum::<usize>() * self.batch_size;
+        let last_idx = self.network.layer_sizes[1..(self.network.layer_sizes.len() - 1)]
+            .iter()
+            .sum::<usize>()
+            * self.batch_size;
         backend.synchronize()?;
         let result = backend.calculate_loss(output.slice(last_idx..), labels.slice(..))?;
         let match_count =
@@ -122,7 +132,7 @@ impl Trainer {
         let mut curr_idx = 0;
         for size in self.network.layer_sizes[1..].iter() {
             let offset = size * self.batch_size;
-            z_out_delta_ranges.push(curr_idx..(curr_idx+offset));
+            z_out_delta_ranges.push(curr_idx..(curr_idx + offset));
             curr_idx += offset;
         }
 
@@ -132,7 +142,7 @@ impl Trainer {
         for layer_sizes in self.network.layer_sizes.windows(2) {
             weight_changes.push(curr_idx..(curr_idx + (layer_sizes[0] * layer_sizes[1])));
             curr_idx += layer_sizes[0] * layer_sizes[1];
-            bias_changes.push(curr_idx..(curr_idx+layer_sizes[1]));
+            bias_changes.push(curr_idx..(curr_idx + layer_sizes[1]));
             curr_idx += layer_sizes[1];
         }
 
@@ -195,11 +205,16 @@ impl Trainer {
                     1.0f32,
                     0.0f32,
                     weights[weights.len() - rev_idx].slice(..),
-                    split_delta.1.slice(0..(second_range.end-second_range.start)), // Since we're going backwards, split_delta.1 is b and 0 is c
-                    split_delta.0.slice_mut(first_range.end-(first_range.end-first_range.start)..first_range.end),
+                    split_delta
+                        .1
+                        .slice(0..(second_range.end - second_range.start)), // Since we're going backwards, split_delta.1 is b and 0 is c
+                    split_delta.0.slice_mut(
+                        first_range.end - (first_range.end - first_range.start)..first_range.end,
+                    ),
                 )?;
             }
-            let mut curr_delta = delta.slice_mut(z_out_delta_ranges[z_out_delta_len - 1 - rev_idx].clone());
+            let mut curr_delta =
+                delta.slice_mut(z_out_delta_ranges[z_out_delta_len - 1 - rev_idx].clone());
             let curr_z = z.slice(z_out_delta_ranges[z_out_delta_len - 1 - rev_idx].clone());
             backend.binary_inplace("multiply", curr_z, curr_delta.slice_mut(..))?;
             // This computes the delta of this layer
@@ -238,7 +253,11 @@ impl Trainer {
         // We have now computed the weight and bias changes for each layer!
 
         // Now we need to apply it:
-        for ((delta_range, layer_size), bias_range) in z_out_delta_ranges.iter().zip(self.network.layer_sizes[1..].iter()).zip(bias_changes.iter()) {
+        for ((delta_range, layer_size), bias_range) in z_out_delta_ranges
+            .iter()
+            .zip(self.network.layer_sizes[1..].iter())
+            .zip(bias_changes.iter())
+        {
             backend.reduce_strided(
                 delta.slice_mut(delta_range.clone()),
                 self.batch_size,
@@ -246,12 +265,19 @@ impl Trainer {
                 *layer_size,
             )?;
 
-            backend.stream.memcpy_dtod(&delta.slice(0..*layer_size), &mut weight_change.slice_mut(bias_range.clone()))?;
+            backend.stream.memcpy_dtod(
+                &delta.slice(0..*layer_size),
+                &mut weight_change.slice_mut(bias_range.clone()),
+            )?;
             // This moves the biases to the main gradient
         }
 
         backend.mult_by_val(weight_change.as_view_mut(), LEARNING_RATE)?;
-        backend.binary_inplace("add", weight_change.as_view(), self.network.weights.as_view_mut())?;
+        backend.binary_inplace(
+            "add",
+            weight_change.as_view(),
+            self.network.weights.as_view_mut(),
+        )?;
 
         backend.synchronize()?;
 
