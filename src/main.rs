@@ -3,8 +3,9 @@ mod layer;
 mod mnist;
 mod network;
 mod trainer;
+mod optimiser;
 
-use crate::{backend::GPUBackend, layer::Layer, mnist::MnistManager, trainer::Trainer};
+use crate::{backend::GPUBackend, layer::Layer, mnist::MnistManager, optimiser::MultiplierOptimiser, trainer::Trainer};
 
 const OUTPUT_LABELS: usize = 10;
 const BATCH_SIZE: usize = 5_000;
@@ -48,7 +49,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{:?}", net);
 
     net.randomise_weights(&backend)?;
-    let mut trainer = Trainer::new(BATCH_SIZE, net);
+    let optimiser = MultiplierOptimiser::new(LEARNING_RATE);
+    let mut trainer = Trainer::new(BATCH_SIZE, net, Box::new(optimiser));
     let data = MnistManager::new(&backend)?;
     let loss = calculate_loss(&backend, &trainer, &data)?;
     println!("Net loss: {}, matches: {}", loss.0, loss.1);
@@ -59,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let offset = i * BATCH_SIZE;
             let (trn_img, trn_lbl) = data.get_train_data(offset..(offset + BATCH_SIZE));
 
-            trainer.backprop(&backend, trn_img, trn_lbl)?;
+            trainer.optimise(&backend, trn_img, trn_lbl)?;
         }
         if epoch % 100 == 0 {
             let loss = calculate_loss(&backend, &trainer, &data)?;

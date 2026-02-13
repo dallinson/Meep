@@ -4,19 +4,21 @@ use crate::{
     LEARNING_RATE, OUTPUT_LABELS,
     backend::{CublasShape, GPUBackend},
     layer::ActivationFunction,
-    network::Network,
+    network::Network, optimiser::{self, Optimiser},
 };
 
 pub(crate) struct Trainer {
     batch_size: usize,
     network: Network,
+    optimiser: Box<dyn Optimiser>
 }
 
 impl Trainer {
-    pub(crate) fn new(batch_size: usize, network: Network) -> Self {
+    pub(crate) fn new(batch_size: usize, network: Network, optimiser: Box<dyn Optimiser>) -> Self {
         Self {
             batch_size,
             network,
+            optimiser
         }
     }
 
@@ -115,17 +117,17 @@ impl Trainer {
         Ok((result, match_count))
     }
 
-    pub(crate) fn backprop(
+    pub(crate) fn compute_gradient(
         &mut self,
         backend: &GPUBackend,
         data: CudaView<f32>,
         labels: CudaView<usize>,
+        mut gradient: CudaViewMut<f32>
     ) -> Result<(), Box<dyn std::error::Error>> {
         let out_size = self.network.layer_sizes[1..].iter().sum::<usize>() * self.batch_size;
         let mut output = backend.stream.alloc_zeros(out_size)?;
         let mut z = backend.stream.alloc_zeros(out_size)?;
         let mut delta = backend.stream.alloc_zeros(out_size)?;
-        let mut weight_change = backend.stream.alloc_zeros(self.network.weights.len())?;
         let (weights, _): (Vec<_>, Vec<_>) = self.network.get_weights_biases().into_iter().unzip();
 
         let mut z_out_delta_ranges = Vec::new();
@@ -246,7 +248,7 @@ impl Trainer {
                     // so len - 2 is legal
                     output.slice(z_out_delta_ranges[z_out_delta_len - 2 - rev_idx].clone())
                 },
-                weight_change.slice_mut(weight_changes[weight_changes.len() - 1 - rev_idx].clone()),
+                gradient.slice_mut(weight_changes[weight_changes.len() - 1 - rev_idx].clone()),
             )?;
         }
 
@@ -267,20 +269,18 @@ impl Trainer {
 
             backend.stream.memcpy_dtod(
                 &delta.slice(0..*layer_size),
-                &mut weight_change.slice_mut(bias_range.clone()),
+                &mut gradient.slice_mut(bias_range.clone()),
             )?;
             // This moves the biases to the main gradient
         }
 
-        backend.mult_by_val(weight_change.as_view_mut(), LEARNING_RATE)?;
-        backend.binary_inplace(
-            "add",
-            weight_change.as_view(),
-            self.network.weights.as_view_mut(),
-        )?;
+        Ok(())
+    }
 
-        backend.synchronize()?;
-
+    pub(crate) fn optimise(&mut self, backend: &GPUBackend, data: CudaView<f32>, labels: CudaView<usize>) -> Result<(), Box<dyn std::error::Error>> {
+        let mut gradient = backend.stream.alloc_zeros(self.network.weights.len())?;
+        self.compute_gradient(backend, data, labels, gradient.as_view_mut());
+        self.optimiser.optimise(backend, gradient.as_view_mut(), self.network.weights.as_view_mut())?;
         Ok(())
     }
 }
