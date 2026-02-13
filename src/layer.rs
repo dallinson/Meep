@@ -1,4 +1,4 @@
-use crate::network::Network;
+use crate::{backend::GPUBackend, network::Network};
 
 #[derive(Copy, Clone)]
 pub(crate) enum ActivationFunction {
@@ -39,7 +39,10 @@ impl<'a> Layer<'a> {
         }
     }
 
-    pub(crate) fn compile(&'a self) -> Network {
-        Network::from_layers(self)
+    pub(crate) fn compile(
+        &'a self,
+        backend: &GPUBackend,
+    ) -> Result<Network, Box<dyn std::error::Error>> {
+        Network::from_layers(self, backend)
     }
 }
