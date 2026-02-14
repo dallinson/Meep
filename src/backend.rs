@@ -361,4 +361,39 @@ impl GPUBackend {
         let res = res.first().unwrap();
         Ok(*res as usize)
     }
+
+    pub(crate) fn adam(
+        &self,
+        gradient: CudaView<f32>,
+        mut weights: CudaViewMut<f32>,
+        mut m: CudaViewMut<f32>,
+        mut v: CudaViewMut<f32>,
+        t: f32,
+        lr: f32,
+        beta1: f32,
+        beta2: f32,
+        epsilon: f32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        debug_assert_eq!(gradient.len(), weights.len());
+        debug_assert_eq!(gradient.len(), m.len());
+        debug_assert_eq!(gradient.len(), v.len());
+        let len = gradient.len();
+        let func = self.kernels.load_function("adam_kernel")?;
+        let mut builder = self.stream.launch_builder(&func);
+        builder.arg(&gradient);
+        builder.arg(&mut weights);
+        builder.arg(&mut m);
+        builder.arg(&mut v);
+        builder.arg(&len);
+        builder.arg(&t);
+        builder.arg(&lr);
+        builder.arg(&beta1);
+        builder.arg(&beta2);
+        builder.arg(&epsilon);
+
+        unsafe {
+            builder.launch(LaunchConfig::for_num_elems(len.div_ceil(4) as u32))?;
+        }
+        Ok(())
+    }
 }

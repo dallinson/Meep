@@ -4,13 +4,14 @@ use crate::{
     LEARNING_RATE, OUTPUT_LABELS,
     backend::{CublasShape, GPUBackend},
     layer::ActivationFunction,
-    network::Network, optimiser::{self, Optimiser},
+    network::Network,
+    optimiser::{self, Optimiser},
 };
 
 pub(crate) struct Trainer {
     batch_size: usize,
     network: Network,
-    optimiser: Box<dyn Optimiser>
+    optimiser: Box<dyn Optimiser>,
 }
 
 impl Trainer {
@@ -18,7 +19,7 @@ impl Trainer {
         Self {
             batch_size,
             network,
-            optimiser
+            optimiser,
         }
     }
 
@@ -122,7 +123,7 @@ impl Trainer {
         backend: &GPUBackend,
         data: CudaView<f32>,
         labels: CudaView<usize>,
-        mut gradient: CudaViewMut<f32>
+        mut gradient: CudaViewMut<f32>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let out_size = self.network.layer_sizes[1..].iter().sum::<usize>() * self.batch_size;
         let mut output = backend.stream.alloc_zeros(out_size)?;
@@ -277,10 +278,19 @@ impl Trainer {
         Ok(())
     }
 
-    pub(crate) fn optimise(&mut self, backend: &GPUBackend, data: CudaView<f32>, labels: CudaView<usize>) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn optimise(
+        &mut self,
+        backend: &GPUBackend,
+        data: CudaView<f32>,
+        labels: CudaView<usize>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut gradient = backend.stream.alloc_zeros(self.network.weights.len())?;
-        self.compute_gradient(backend, data, labels, gradient.as_view_mut());
-        self.optimiser.optimise(backend, gradient.as_view_mut(), self.network.weights.as_view_mut())?;
+        self.compute_gradient(backend, data, labels, gradient.as_view_mut())?;
+        self.optimiser.optimise(
+            backend,
+            gradient.as_view_mut(),
+            self.network.weights.as_view_mut(),
+        )?;
         Ok(())
     }
 }
