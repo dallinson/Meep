@@ -1,5 +1,7 @@
+
 using f32 = float;
 using usize = size_t;
+using i32 = int;
 
 __device__ f32 sigmoid(f32 in) { return 1.0f / (1.0f + exp(-1.0f * in)); };
 __device__ f32 sigmoid_prime(f32 in) { return sigmoid(in) * (1.0f - sigmoid(in)); };
@@ -187,4 +189,71 @@ extern "C" __global__ void find_matching(const f32* data, const usize* labels, f
         }
     }
     matches[tid] = max_idx == labels[tid] ? 1.0f : 0.0f;
+}
+
+__host__ __device__ float4 operator*(const float4 left, const f32 right) {
+    return make_float4(left.x * right, left.y * right, left.z * right, left.w * right);
+}
+
+__host__ __device__ float4 operator*(const f32 left, const float4 right) {
+    return right * left;
+}
+
+__host__ __device__ float4 operator+(const float4 left, const float4 right) {
+    return make_float4(left.x + right.x, left.y + right.y, left.z + right.z, left.w + right.w);
+}
+
+__host__ __device__ float4 powf(const float4 left, f32 right) {
+    return make_float4(powf(left.x, right), powf(left.y, right), powf(left.z, right), powf(left.w, right));
+}
+
+__host__ __device__ float4 operator/(const float4 left, const f32 right) {
+    return make_float4(left.x / right, left.y / right, left.z / right, left.w / right);
+}
+
+__host__ __device__ float4 sqrt(const float4 left) {
+    return make_float4(sqrt(left.x), sqrt(left.y), sqrt(left.z), sqrt(left.w));
+}
+
+__host__ __device__ float4 operator+(const float4 left, const f32 right) {
+    return make_float4(left.x + right, left.y + right, left.z + right, left.w + right);
+}
+
+__host__ __device__ float4 operator/(const float4 left, const float4 right) {
+    return make_float4(left.x / right.x, left.y / right.y, left.z / right.z, left.w / right.w);
+}
+
+extern "C" __global__ void adam_kernel(const f32* gradient, f32* weights, f32* m, f32* v, usize count, f32 t, f32 lr, f32 beta1, f32 beta2, f32 epsilon) {
+    const auto tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid >= ceil_div(count, static_cast<usize>(4))) {
+        return;
+    }
+    if (count - (tid * 4) < 4) {
+        for (int i = 0; i < (count - (tid * 4)); i++) {
+            const auto idx = (tid * 4) + i;
+            m[idx] = m[idx] * beta1 + (1.0f - beta1) * gradient[idx];
+            v[idx] = v[idx] * beta2 + (1.0f - beta2) * powf(gradient[idx], 2.0f);
+
+            const auto m_hat = m[idx] / (1.0f - powf(beta1, t));
+            const auto v_hat = v[idx] / (1.0f - powf(beta2, t));
+
+            weights[idx] = weights[idx] - lr * m_hat / (sqrt(v_hat) + epsilon);
+        }
+    } else {
+        auto m_f4 = reinterpret_cast<float4*>(m)[tid];
+        auto v_f4 = reinterpret_cast<float4*>(v)[tid];
+        auto grad_f4 = reinterpret_cast<const float4*>(gradient)[tid];
+
+        m_f4 = m_f4 * beta1 + (1.0f - beta1) * grad_f4;
+        v_f4 = v_f4 * beta2 + (1.0f - beta2) * powf(grad_f4, 2.0f);
+
+        const auto m_hat = m_f4 / (1.0f - powf(beta1, t));
+        const auto v_hat = v_f4 / (1.0f - powf(beta2, t));
+
+        reinterpret_cast<float4*>(m)[tid] = m_f4;
+        reinterpret_cast<float4*>(v)[tid] = v_f4;
+
+        reinterpret_cast<float4*>(weights)[tid] = reinterpret_cast<float4*>(weights)[tid] - lr * m_hat / (sqrt(v_hat) + epsilon);
+    }
+
 }
