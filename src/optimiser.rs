@@ -91,3 +91,64 @@ impl AdamOptimiser {
         })
     }
 }
+
+pub(crate) struct AdamWOptimiser {
+    m: CudaSlice<f32>,
+    v: CudaSlice<f32>,
+    t: f32,
+    lr: f32,
+    beta1: f32,
+    beta2: f32,
+    epsilon: f32,
+    weight_decay: f32
+}
+
+impl Optimiser for AdamWOptimiser {
+    fn optimise(
+        &mut self,
+        backend: &GPUBackend,
+        gradient: CudaViewMut<f32>,
+        weights: CudaViewMut<f32>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        backend.adamw(
+            gradient.as_view(),
+            weights,
+            self.m.as_view_mut(),
+            self.v.as_view_mut(),
+            self.t,
+            self.lr,
+            self.beta1,
+            self.beta2,
+            self.epsilon,
+            self.weight_decay,
+        )
+    }
+}
+
+impl AdamWOptimiser {
+    pub(crate) fn new(
+        backend: &GPUBackend,
+        net: &Network,
+        t: f32,
+        lr: f32,
+        beta1: f32,
+        beta2: f32,
+        epsilon: f32,
+        weight_decay: f32,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let gradient_size = net.weights.len();
+        let m = backend.stream.alloc_zeros(gradient_size)?;
+        let v = backend.stream.alloc_zeros(gradient_size)?;
+
+        Ok(Self {
+            m,
+            v,
+            t,
+            lr,
+            beta1,
+            beta2,
+            epsilon,
+            weight_decay,
+        })
+    }
+}

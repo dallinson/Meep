@@ -6,14 +6,14 @@ mod optimiser;
 mod trainer;
 
 use crate::{
-    backend::GPUBackend, layer::Layer, mnist::MnistManager, optimiser::{AdamOptimiser, MultiplierOptimiser},
+    backend::GPUBackend, layer::Layer, mnist::MnistManager, optimiser::{AdamOptimiser, AdamWOptimiser, MultiplierOptimiser},
     trainer::Trainer,
 };
 
 const OUTPUT_LABELS: usize = 10;
 const BATCH_SIZE: usize = 5_000;
 const EPOCH_SIZE: usize = 60_000;
-const EPOCH_COUNT: usize = 1_000;
+const EPOCH_COUNT: usize = 10_000;
 const LEARNING_RATE: f32 = -1e-3;
 
 fn calculate_loss(
@@ -43,11 +43,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = GPUBackend::new(ctx.clone())?;
 
     let l1 = Layer::new(28 * 28);
-    let l2 = l1.matmul(512);
+    let l2 = l1.matmul(64);
     let l2 = l2.sigmoid();
-    let l3 = l2.matmul(256);
-    let l3 = l3.sigmoid();
-    let output = l3.matmul(10);
+    let output = l2.matmul(10);
     let output = output.sigmoid();
     let mut net = output.compile(&backend)?;
 
@@ -55,7 +53,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     net.randomise_weights(&backend)?;
     //let optimiser = MultiplierOptimiser::new(LEARNING_RATE);
-    let optimiser = AdamOptimiser::new(&backend, &net, 1.0f32, 1e-3, 0.9f32, 0.999f32, 1e-8)?;
+    //let optimiser = AdamOptimiser::new(&backend, &net, 1.0f32, 1e-3, 0.9f32, 0.999f32, 1e-8)?;
+    let optimiser = AdamWOptimiser::new(&backend, &net, 1.0f32, 1e-3, 0.9f32, 0.999f32, 1e-8, 0.01f32)?;
     let mut trainer = Trainer::new(BATCH_SIZE, net, Box::new(optimiser));
     let data = MnistManager::new(&backend)?;
     let loss = calculate_loss(&backend, &trainer, &data)?;
