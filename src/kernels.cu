@@ -255,5 +255,51 @@ extern "C" __global__ void adam_kernel(const f32* gradient, f32* weights, f32* m
 
         reinterpret_cast<float4*>(weights)[tid] = reinterpret_cast<float4*>(weights)[tid] - lr * m_hat / (sqrt(v_hat) + epsilon);
     }
-
 }
+
+extern "C" __global__ void adamw_kernel(const f32* gradient, f32* weights, f32* m, f32* v, usize count, f32 t, f32 lr, f32 beta1, f32 beta2, f32 epsilon, f32 weight_decay) {
+    const auto tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid >= ceil_div(count, static_cast<usize>(4))) {
+        return;
+    }
+    if (count - (tid * 4) < 4) {
+        for (int i = 0; i < (count - (tid * 4)); i++) {
+            const auto idx = (tid * 4) + i;
+            m[idx] = m[idx] * beta1 + (1.0f - beta1) * gradient[idx];
+            v[idx] = v[idx] * beta2 + (1.0f - beta2) * powf(gradient[idx], 2.0f);
+
+            const auto m_hat = m[idx] / (1.0f - powf(beta1, t));
+            const auto v_hat = v[idx] / (1.0f - powf(beta2, t));
+
+            const auto weight = weights[idx];
+
+            weights[idx] = weights[idx] - lr * m_hat / (sqrt(v_hat) + epsilon);
+
+            if (weight_decay != 0) {
+                weights[idx] = weights[idx] - lr * weight_decay * weight;
+            }
+        }
+    } else {
+        auto m_f4 = reinterpret_cast<float4*>(m)[tid];
+        auto v_f4 = reinterpret_cast<float4*>(v)[tid];
+        auto grad_f4 = reinterpret_cast<const float4*>(gradient)[tid];
+
+        m_f4 = m_f4 * beta1 + (1.0f - beta1) * grad_f4;
+        v_f4 = v_f4 * beta2 + (1.0f - beta2) * powf(grad_f4, 2.0f);
+
+        const auto m_hat = m_f4 / (1.0f - powf(beta1, t));
+        const auto v_hat = v_f4 / (1.0f - powf(beta2, t));
+
+        reinterpret_cast<float4*>(m)[tid] = m_f4;
+        reinterpret_cast<float4*>(v)[tid] = v_f4;
+
+        const auto prev_weights = reinterpret_cast<float4*>(weights)[tid];
+
+        reinterpret_cast<float4*>(weights)[tid] = reinterpret_cast<float4*>(weights)[tid] - lr * m_hat / (sqrt(v_hat) + epsilon);
+
+        if (weight_decay != 0) {
+            reinterpret_cast<float4*>(weights)[tid] = reinterpret_cast<float4*>(weights)[tid] - lr * weight_decay * prev_weights;
+        }
+    }
+}
+
